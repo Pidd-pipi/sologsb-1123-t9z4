@@ -21,9 +21,11 @@ import { PlusOutlined, ReloadOutlined } from '@ant-design/icons';
 import { useMissionStore } from '../stores/missionStore';
 import { useWaypointStore } from '../stores/waypointStore';
 import { useAssetStore } from '../stores/assetStore';
+import { usePlanStore, PlanConflictError, PlanValidationError } from '../stores/planStore';
 import { useMissionFilter } from '../hooks/useMissionFilter';
 import MissionCard from '../components/common/MissionCard';
 import { MISSION_PURPOSES, MISSION_STATUSES, type LngLat, type MissionDraft, type MissionPurpose, type MissionStatus } from '../types/mission';
+import { ensureMissionPlan } from '../utils/planService';
 
 const DEFAULT_POLYGON: LngLat[] = [
   [116.3912, 39.9075],
@@ -53,6 +55,12 @@ export default function MissionList() {
   const addMission = useMissionStore((s) => s.add);
   const waypoints = useWaypointStore((s) => s.items);
   const assets = useAssetStore((s) => s.items);
+  const planVersions = usePlanStore((s) => s.versions);
+  const planSorties = usePlanStore((s) => s.sorties);
+  const transitionStatus = usePlanStore((s) => s.setStatus);
+  const markConflict = usePlanStore((s) => s.markArchiveConflict);
+  const clearConflict = usePlanStore((s) => s.clearConflict);
+  const loadPlans = usePlanStore((s) => s.load);
   const { filters, patch, reset, result, options } = useMissionFilter();
 
   const [open, setOpen] = useState(false);
@@ -87,9 +95,39 @@ export default function MissionList() {
       waypoints: waypoints.length,
       assets: assets.length,
       qualified: assets.filter((a) => a.quality === '合格').length,
+      unbound: assets.filter((a) => !a.planVersionId || !a.sortieId).length,
+      conflicts: missions.filter((m) => m.archiveConflict).length,
     }),
     [missions, waypoints, assets],
   );
+
+  const runTransition = async (missionId: string, status: Parameters<typeof transitionStatus>[1]) => {
+    setError('');
+    const mission = missions.find((m) => m.id === missionId);
+    try {
+      await transitionStatus(missionId, status, mission?.archiveRevision ?? 0);
+      setToast(status === '已归档' ? '已归档：所有影像已绑定且架次均已核销' : `任务状态已更新为「${status}」`);
+    } catch (err) {
+      if (err instanceof PlanConflictError) {
+        await markConflict(missionId);
+        setToast('版本冲突：另一个标签页已先归档，先提交结果未被覆盖');
+      } else {
+        setError(err instanceof PlanValidationError ? err.message : '状态更新失败');
+      }
+    }
+  };
+
+  const canArchiveMission = (missionId: string) => {
+    const missionAssets = assets.filter((a) => a.missionId === missionId);
+    const missionSorties = planSorties.filter((s) => s.missionId === missionId);
+    return (
+      !missions.find((m) => m.id === missionId)?.archiveConflict &&
+      missionAssets.length > 0 &&
+      missionAssets.every((a) => a.planVersionId && a.sortieId) &&
+      missionSorties.length > 0 &&
+      missionSorties.every((s) => s.status === '已核销')
+    );
+  };
 
   const submit = async () => {
     if (!draft.missionNo.trim()) {
@@ -111,6 +149,8 @@ export default function MissionList() {
       name: draft.name.trim() || draft.missionNo.trim(),
       areaPolygon: polygon,
     });
+    await ensureMissionPlan(created);
+    await loadPlans();
     setOpen(false);
     setError('');
     setToast(`已建立任务「${created.missionNo}」，测区 ${polygon.length} 个边界点`);
@@ -134,26 +174,12 @@ export default function MissionList() {
       {toast ? <Alert type="success" showIcon message={toast} closable onClose={() => setToast('')} /> : null}
 
       <Row gutter={12}>
-        <Col span={6}>
-          <Card size="small">
-            <Statistic title="任务总数" value={stats.missions} suffix="个" />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card size="small">
-            <Statistic title="航点总数" value={stats.waypoints} suffix="个" />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card size="small">
-            <Statistic title="成果影像条目" value={stats.assets} suffix="张" />
-          </Card>
-        </Col>
-        <Col span={6}>
-          <Card size="small">
-            <Statistic title="合格影像" value={stats.qualified} suffix="张" />
-          </Card>
-        </Col>
+        <Col span={4}><Card size="small"><Statistic title="任务总数" value={stats.missions} suffix="个" /></Card></Col>
+        <Col span={4}><Card size="small"><Statistic title="航点总数" value={stats.waypoints} suffix="个" /></Card></Col>
+        <Col span={4}><Card size="small"><Statistic title="成果影像" value={stats.assets} suffix="张" /></Card></Col>
+        <Col span={4}><Card size="small"><Statistic title="合格影像" value={stats.qualified} suffix="张" /></Card></Col>
+        <Col span={4}><Card size="small"><Statistic title="未绑定" value={stats.unbound} suffix="张" /></Card></Col>
+        <Col span={4}><Card size="small"><Statistic title="归档冲突" value={stats.conflicts} suffix="个" /></Card></Col>
       </Row>
 
       <Card size="small">
@@ -225,6 +251,15 @@ export default function MissionList() {
                 waypointCount={row.waypointCount}
                 assetCount={row.assetCount}
                 lineCount={row.waypointCount > 1 ? 1 : 0}
+                versions={planVersions.filter((v) => v.missionId === row.mission.id)}
+                currentVersion={
+                  planVersions.find((v) => v.id === row.mission.currentVersionId) ??
+                  planVersions
+                    .filter((v) => v.missionId === row.mission.id && v.status !== '草稿')
+                    .sort((a, b) => b.versionNo - a.versionNo)[0]
+                }
+                sorties={planSorties.filter((s) => s.missionId === row.mission.id)}
+                unboundCount={assets.filter((a) => a.missionId === row.mission.id && (!a.planVersionId || !a.sortieId)).length}
                 footer={
                   <Space wrap size={4}>
                     <Button size="small" type="link" onClick={() => navigate(`/missions/${row.mission.id}/route`)}>
@@ -236,8 +271,34 @@ export default function MissionList() {
                     <Button size="small" type="link" onClick={() => navigate(`/missions/${row.mission.id}/assets`)}>
                       成果编目
                     </Button>
+                    {row.mission.status === '规划中' ? (
+                      <Button size="small" type="primary" ghost onClick={() => runTransition(row.mission.id, '待飞行')}>
+                        冻结待飞
+                      </Button>
+                    ) : null}
+                    {row.mission.status === '待飞行' ? (
+                      <Button size="small" type="primary" ghost onClick={() => runTransition(row.mission.id, '已飞行')}>
+                        标记已飞
+                      </Button>
+                    ) : null}
+                    {row.mission.status === '已飞行' ? (
+                      <Button
+                        size="small"
+                        type="primary"
+                        disabled={!canArchiveMission(row.mission.id)}
+                        title={canArchiveMission(row.mission.id) ? undefined : '全部影像已绑定且架次已核销后才能归档'}
+                        onClick={() => runTransition(row.mission.id, '已归档')}
+                      >
+                        归档
+                      </Button>
+                    ) : null}
+                    {row.mission.archiveConflict ? (
+                      <Button size="small" danger onClick={() => clearConflict(row.mission.id)}>
+                        我知道了
+                      </Button>
+                    ) : null}
                     <Button size="small" type="link" onClick={() => navigate('/settings/camera')}>
-                      相机预设
+                      相机
                     </Button>
                   </Space>
                 }

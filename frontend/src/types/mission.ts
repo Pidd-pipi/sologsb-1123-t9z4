@@ -34,10 +34,16 @@ export interface Mission {
   flightDate: string;
   pilot: string;
   status: MissionStatus;
+  /** 当前生效的冻结方案版本 */
+  currentVersionId?: string;
+  /** 归档乐观锁：两个标签页同时归档时，旧令牌会失败 */
+  archiveRevision: number;
+  /** 当前页面曾错过其他标签页的归档提交 */
+  archiveConflict?: boolean;
   createdAt: number;
 }
 
-export type MissionDraft = Omit<Mission, 'id' | 'createdAt'>;
+export type MissionDraft = Omit<Mission, 'id' | 'createdAt' | 'archiveRevision' | 'currentVersionId' | 'archiveConflict'>;
 
 /** 相机预设 */
 export interface CameraPreset {

@@ -97,8 +97,11 @@ sologsb-1123/
 
 ## 数据存储说明
 
-- 数据库名 `gbdronemap`，当前结构版本 **v2**（`localStorage['gbdronemap:db-version']` 记录）。
-- 六张表：`missions`（任务）、`waypoints`（航点）、`lines`（航线参数）、`assets`（成果影像条目）、`thumbs`（**缩略图单独建表**，dataUrl）、`presets`（相机预设）。
-- v1 → v2 迁移：为老任务补 `areaPolygon`/传感器默认值，为航线补 `updatedAt`/`batteryCount`，并新增索引。
+- 数据库名 `gbdronemap`，当前结构版本 **v3**（`localStorage['gbdronemap:db-version']` 记录）。
+- 八张表：`missions`（任务）、`waypoints`（航点）、`lines`（航线工作参数）、`assets`（成果影像条目）、`thumbs`（**缩略图单独建表**，dataUrl）、`presets`（相机预设）、`planVersions`（冻结方案版本快照）、`sorties`（架次核销）。
+- 任务进入「待飞行」时按当时航点、航线与相机参数生成不可变方案版本；冻结后的修改先形成新版本，已飞版本持续保留当时航高、航向/旁向重叠率与 GSD。
+- 成果按片号接收并绑定到架次：重复片号只补空值，不覆盖已判质量和缩略图；全部影像已绑定、所有架次已核销且无并发归档冲突时才允许归档。
+- 归档使用 `archiveRevision` 乐观锁。两个标签页同时归档时，后提交者会收到版本冲突，先提交结果不会被覆盖。
+- v2 → v3 启动时自动为老任务补初始版本和架次，并把已有成果绑定到首架次。
 - 容器无状态、不挂载命名卷；清空站点数据即回到初始示范数据。
 - 首次打开灌入 2 个示范任务、5 个航点、2 条航线参数、6 条成果影像条目（含缩略图）与 3 套相机预设。

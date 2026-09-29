@@ -3,10 +3,11 @@ import type { CameraPreset, Mission } from '../types/mission';
 import type { Waypoint } from '../types/waypoint';
 import type { FlightLine } from '../types/flightline';
 import { makeThumbDataUrl, type AssetThumb, type ImageAsset } from '../types/imageasset';
+import type { PlanVersion, SortieRecord } from '../types/planVersion';
 import { newId } from './id';
 
 export const DB_NAME = 'gbdronemap';
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 export const LS_VERSION_KEY = 'gbdronemap:db-version';
 
 class DroneMapDB extends Dexie {
@@ -16,6 +17,8 @@ class DroneMapDB extends Dexie {
   assets!: Table<ImageAsset, string>;
   thumbs!: Table<AssetThumb, string>;
   presets!: Table<CameraPreset, string>;
+  planVersions!: Table<PlanVersion, string>;
+  sorties!: Table<SortieRecord, string>;
 
   constructor() {
     super(DB_NAME);
@@ -55,6 +58,16 @@ class DroneMapDB extends Dexie {
             if (row.batteryCount === undefined) row.batteryCount = 1;
           });
       });
+    this.version(3).stores({
+      missions: 'id, missionNo, areaName, droneModel, flightDate, status, purpose, currentVersionId, createdAt',
+      waypoints: 'id, missionId, seq, action, altitude',
+      lines: 'id, missionId, lineNo, updatedAt',
+      assets: 'id, missionId, imageNo, quality, shotAt, planVersionId, sortieId',
+      thumbs: 'id, missionId',
+      presets: 'id, name, cameraModel',
+      planVersions: 'id, missionId, versionNo, status, createdAt',
+      sorties: 'id, missionId, planVersionId, sortieNo, status',
+    });
   }
 }
 
@@ -83,9 +96,10 @@ export async function loadFlightLine(missionId: string): Promise<FlightLine | un
   return rows.sort((a, b) => a.lineNo - b.lineNo)[0];
 }
 
-/** 保存 / 更新航线参数 */
+/** 保存 / 更新航线参数（每任务保留一条工作参数） */
 export async function saveFlightLine(line: FlightLine): Promise<void> {
-  await db.lines.put(line);
+  const existing = await loadFlightLine(line.missionId);
+  await db.lines.put({ ...line, id: existing?.id ?? line.id });
 }
 
 /** 按航线参数把任务拆分为多架次（每架次按电池组数分组） */
@@ -141,6 +155,7 @@ export async function ensureSeedData(): Promise<void> {
       flightDate: '2024-09-12',
       pilot: '穆清和',
       status: '已飞行',
+      archiveRevision: 0,
       createdAt: now - 30 * day,
     },
     {
@@ -159,6 +174,7 @@ export async function ensureSeedData(): Promise<void> {
       flightDate: '2024-09-20',
       pilot: '纪长风',
       status: '待飞行',
+      archiveRevision: 0,
       createdAt: now - 8 * day,
     },
   ];
@@ -252,6 +268,7 @@ export async function ensureSeedData(): Promise<void> {
       tiltAngle: 2 + index,
       shotAt: now - 30 * day + index * 12000,
       quality,
+      receivedAt: now - 30 * day + index * 12000,
       folder: `/DM-2024-018/100MEDIA`,
     });
     thumbs.push({ id, missionId: missionA, dataUrl: makeThumbDataUrl(`IMG_${1001 + index}`, quality, lng, lat) });

@@ -1,6 +1,8 @@
 import { create } from 'zustand';
 import { db } from '../utils/db';
 import { newId } from '../utils/id';
+import { emitPlanChanged } from '../utils/planEvents';
+import { touchWorkingPlan } from '../utils/planService';
 import type { CameraPreset, Mission, MissionDraft, MissionStatus } from '../types/mission';
 
 interface MissionState {
@@ -17,6 +19,8 @@ interface MissionState {
   remove: (id: string) => Promise<void>;
 }
 
+const CAMERA_PATCH_KEYS = ['cameraModel', 'sensorWidth', 'sensorHeight', 'focalLength', 'pixelSize'] as const;
+
 export const useMissionStore = create<MissionState>((set, get) => ({
   items: [],
   presets: [],
@@ -27,14 +31,29 @@ export const useMissionStore = create<MissionState>((set, get) => ({
     set({ items: rows, presets, loaded: true });
   },
   async add(draft) {
-    const record: Mission = { ...draft, id: newId('mission'), createdAt: Date.now() };
+    const record: Mission = {
+      ...draft,
+      id: newId('mission'),
+      archiveRevision: 0,
+      archiveConflict: undefined,
+      createdAt: Date.now(),
+    };
     await db.missions.put(record);
     set({ items: [record, ...get().items] });
+    emitPlanChanged();
     return record;
   },
   async update(id, patch) {
+    const previous = get().items.find((it) => it.id === id);
+    if (previous?.status === '已归档' && CAMERA_PATCH_KEYS.some((key) => patch[key] !== undefined)) {
+      throw new Error('已归档任务的相机参数已随方案冻结');
+    }
     await db.missions.update(id, patch);
     set({ items: get().items.map((it) => (it.id === id ? { ...it, ...patch } : it)) });
+    if (CAMERA_PATCH_KEYS.some((key) => patch[key] !== undefined)) {
+      await touchWorkingPlan(id);
+      emitPlanChanged();
+    }
   },
   async setStatus(id, status) {
     await get().update(id, { status });
@@ -61,7 +80,21 @@ export const useMissionStore = create<MissionState>((set, get) => ({
     set({ presets: get().presets.filter((p) => p.id !== id) });
   },
   async remove(id) {
-    await db.missions.delete(id);
+    await db.transaction(
+      'rw',
+      [db.missions, db.waypoints, db.lines, db.assets, db.thumbs, db.planVersions, db.sorties],
+      async () => {
+        const assetIds = await db.assets.where('missionId').equals(id).primaryKeys();
+        await db.thumbs.bulkDelete(assetIds);
+        await db.assets.where('missionId').equals(id).delete();
+        await db.sorties.where('missionId').equals(id).delete();
+        await db.planVersions.where('missionId').equals(id).delete();
+        await db.lines.where('missionId').equals(id).delete();
+        await db.waypoints.where('missionId').equals(id).delete();
+        await db.missions.delete(id);
+      },
+    );
     set({ items: get().items.filter((it) => it.id !== id) });
+    emitPlanChanged();
   },
 }));

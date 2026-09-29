@@ -25,6 +25,7 @@ import { useRouteMetrics, DEFAULT_ROUTE_PARAMS } from '../hooks/useRouteMetrics'
 import AmapRouteView from '../components/common/AmapRouteView';
 import { WAYPOINT_ACTIONS, parseWaypointText, type Waypoint, type WaypointAction } from '../types/waypoint';
 import { calcGsd, groundCoverage } from '../utils/geoCalc';
+import { usePlanStore, PlanValidationError } from '../stores/planStore';
 
 type Columns = NonNullable<TableProps<Waypoint>['columns']>;
 
@@ -39,6 +40,9 @@ export default function WaypointTable() {
   const reorder = useWaypointStore((s) => s.reorder);
   const remove = useWaypointStore((s) => s.remove);
   const clearMission = useWaypointStore((s) => s.removeByMission);
+  const currentVersion = usePlanStore((s) => s.currentVersion);
+  const versionsForMission = usePlanStore((s) => s.versionsForMission);
+  const transitionStatus = usePlanStore((s) => s.setStatus);
 
   const mission = missions.find((m) => m.id === id);
   const rows = useMemo(
@@ -51,6 +55,8 @@ export default function WaypointTable() {
   const [previewId, setPreviewId] = useState('');
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
+  const activeVersion = mission ? currentVersion(id, mission) : undefined;
+  const draftVersion = mission ? versionsForMission(id).find((v) => v.status === '草稿') : undefined;
 
   useEffect(() => {
     if (!toast) return;
@@ -220,6 +226,8 @@ export default function WaypointTable() {
           航点明细 · {mission.missionNo}
         </Typography.Title>
         <Tag color="green">航点 {rows.length} 个</Tag>
+        <Tag color="purple">{activeVersion ? `版本 v${activeVersion.versionNo} · ${activeVersion.status}` : '方案未冻结'}</Tag>
+        {draftVersion ? <Tag color="orange">修改待发布 v{draftVersion.versionNo}</Tag> : null}
         <Tag>传感器 {mission.sensorWidth}×{mission.sensorHeight} mm / f{mission.focalLength} mm</Tag>
         <div style={{ flex: 1 }} />
         <Button type="link">
@@ -227,6 +235,20 @@ export default function WaypointTable() {
         </Button>
         <Button type="link">
           <Link to={`/missions/${mission.id}/assets`}>成果编目</Link>
+        </Button>
+        <Button
+          type={mission.status === '规划中' ? 'primary' : 'default'}
+          size="small"
+          onClick={async () => {
+            try {
+              await transitionStatus(mission.id, '待飞行');
+              setToast('已按当前航点、航线和相机参数冻结方案版本');
+            } catch (err) {
+              setError(err instanceof PlanValidationError ? err.message : '方案冻结失败');
+            }
+          }}
+        >
+          {mission.status === '规划中' ? '进入待飞行并冻结' : draftVersion ? `发布 v${draftVersion.versionNo}` : '重新冻结新版本'}
         </Button>
         <Button danger size="small" onClick={() => clearMission(mission.id)}>
           清空本任务航点

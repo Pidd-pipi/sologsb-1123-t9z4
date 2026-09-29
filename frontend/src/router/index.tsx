@@ -5,7 +5,10 @@ import { RocketOutlined } from '@ant-design/icons';
 import { useMissionStore } from '../stores/missionStore';
 import { useWaypointStore } from '../stores/waypointStore';
 import { useAssetStore } from '../stores/assetStore';
-import { ensureSeedData, markDbVersion, readDbVersion } from '../utils/db';
+import { usePlanStore } from '../stores/planStore';
+import { db, ensureSeedData, markDbVersion, readDbVersion } from '../utils/db';
+import { ensureMissionPlan } from '../utils/planService';
+import { onPlanChanged } from '../utils/planEvents';
 import { hasAmapKey } from '../utils/amapLoader';
 import MissionList from '../pages/MissionList';
 import RoutePlanner from '../pages/RoutePlanner';
@@ -19,8 +22,16 @@ function Shell() {
   const location = useLocation();
   const navigate = useNavigate();
   const missions = useMissionStore((s) => s.items);
+  const loadMissions = useMissionStore((s) => s.load);
+  const loadWaypoints = useWaypointStore((s) => s.load);
+  const loadAssets = useAssetStore((s) => s.load);
+  const loadPlans = usePlanStore((s) => s.load);
   const version = readDbVersion();
   const firstMissionId = missions[0]?.id;
+
+  useEffect(() => onPlanChanged(() => {
+    void Promise.all([loadMissions(), loadWaypoints(), loadAssets(), loadPlans()]);
+  }), [loadMissions, loadWaypoints, loadAssets, loadPlans]);
 
   const items = useMemo(
     () => [
@@ -87,19 +98,32 @@ export default function AppRouter() {
   const loadMissions = useMissionStore((s) => s.load);
   const loadWaypoints = useWaypointStore((s) => s.load);
   const loadAssets = useAssetStore((s) => s.load);
+  const loadPlans = usePlanStore((s) => s.load);
 
   useEffect(() => {
     let alive = true;
     (async () => {
       await ensureSeedData();
       markDbVersion();
-      await Promise.all([loadMissions(), loadWaypoints(), loadAssets()]);
+      await loadMissions();
+      const missions = await db.missions.toArray();
+      await Promise.all(missions.map((mission) => ensureMissionPlan(mission)));
+      await Promise.all([loadMissions(), loadWaypoints(), loadAssets(), loadPlans()]);
       if (alive) setReady(true);
     })();
+    const refresh = () => {
+      if (document.visibilityState === 'visible') {
+        void Promise.all([loadMissions(), loadWaypoints(), loadAssets(), loadPlans()]);
+      }
+    };
+    document.addEventListener('visibilitychange', refresh);
+    window.addEventListener('focus', refresh);
     return () => {
       alive = false;
+      document.removeEventListener('visibilitychange', refresh);
+      window.removeEventListener('focus', refresh);
     };
-  }, [loadMissions, loadWaypoints, loadAssets]);
+  }, [loadMissions, loadWaypoints, loadAssets, loadPlans]);
 
   if (!ready) {
     return (

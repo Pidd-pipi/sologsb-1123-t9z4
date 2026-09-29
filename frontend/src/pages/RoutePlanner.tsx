@@ -8,6 +8,9 @@ import AmapRouteView from '../components/common/AmapRouteView';
 import OverlapCalcPanel from '../components/common/OverlapCalcPanel';
 import { loadFlightLine, saveFlightLine, splitSorties } from '../utils/db';
 import { newId } from '../utils/id';
+import { emitPlanChanged } from '../utils/planEvents';
+import { touchWorkingPlan } from '../utils/planService';
+import { usePlanStore, PlanValidationError } from '../stores/planStore';
 import type { FlightLine } from '../types/flightline';
 import type { Waypoint } from '../types/waypoint';
 
@@ -24,6 +27,9 @@ export default function RoutePlanner() {
   const missions = useMissionStore((s) => s.items);
   const waypoints = useWaypointStore((s) => s.items);
   const addWaypoint = useWaypointStore((s) => s.add);
+  const currentVersion = usePlanStore((s) => s.currentVersion);
+  const versionsForMission = usePlanStore((s) => s.versionsForMission);
+  const setStatus = usePlanStore((s) => s.setStatus);
   const mission = missions.find((m) => m.id === id);
   const missionWaypoints = useMemo(
     () => waypoints.filter((w) => w.missionId === id).sort((a, b) => a.seq - b.seq),
@@ -33,7 +39,11 @@ export default function RoutePlanner() {
   const [params, setParams] = useState<RouteParams>({ ...DEFAULT_ROUTE_PARAMS });
   const [savedText, setSavedText] = useState('');
   const [error, setError] = useState('');
+  const [busy, setBusy] = useState(false);
   const metrics = useRouteMetrics(id, params);
+  const planVersions = mission ? versionsForMission(id) : [];
+  const activeVersion = mission ? currentVersion(id, mission) : undefined;
+  const draftVersion = planVersions.find((v) => v.status === '草稿');
 
   useEffect(() => {
     if (!id) return;
@@ -58,8 +68,13 @@ export default function RoutePlanner() {
 
   const onSave = async () => {
     if (!mission) return;
+    if (mission.status === '已归档') {
+      setError('已归档任务的航线参数已冻结，不能保存修改');
+      return;
+    }
+    const existing = await loadFlightLine(mission.id);
     const line: FlightLine = {
-      id: newId('line'),
+      id: existing?.id ?? newId('line'),
       missionId: mission.id,
       lineNo: 1,
       spacing: metrics.spacing,
@@ -74,11 +89,34 @@ export default function RoutePlanner() {
       updatedAt: Date.now(),
     };
     await saveFlightLine(line);
+    if (mission.status !== '规划中') {
+      await touchWorkingPlan(mission.id);
+      emitPlanChanged();
+    }
     setSavedText(`已保存 ${new Date(line.updatedAt).toLocaleString('zh-CN')}`);
+  };
+
+  const freezeCurrentPlan = async () => {
+    if (!mission) return;
+    setBusy(true);
+    setError('');
+    try {
+      await onSave();
+      await setStatus(mission.id, '待飞行');
+      setSavedText(`已${planVersions.some((v) => v.status === '冻结' || v.status === '已飞') ? '生成新版本并' : ''}冻结方案`);
+    } catch (err) {
+      setError(err instanceof PlanValidationError ? err.message : '方案冻结失败');
+    } finally {
+      setBusy(false);
+    }
   };
 
   const pickPoint = async (lng: number, lat: number) => {
     if (!mission) return;
+    if (mission.status === '已归档') {
+      setError('已归档任务的航点已随方案冻结');
+      return;
+    }
     if (missionWaypoints.length >= 60) {
       setError('单任务航点上限为 60 个，请拆分架次');
       return;
@@ -129,6 +167,8 @@ export default function RoutePlanner() {
         <Tag color="cyan">{mission.purpose}</Tag>
         <Tag>{mission.areaName}</Tag>
         <Tag color={missionWaypoints.length > 0 ? 'green' : 'default'}>航点 {missionWaypoints.length} 个</Tag>
+        <Tag color="purple">版本 {activeVersion ? `v${activeVersion.versionNo} · ${activeVersion.status}` : '未冻结'}</Tag>
+        {draftVersion ? <Tag color="orange">修改待发布</Tag> : null}
         <div style={{ flex: 1 }} />
         <Button type="link">
           <Link to={`/missions/${mission.id}/waypoints`}>航点明细</Link>
@@ -145,6 +185,29 @@ export default function RoutePlanner() {
       </Space>
 
       {error ? <Alert type="error" showIcon message={error} closable onClose={() => setError('')} /> : null}
+
+      {mission.status !== '规划中' ? (
+        <Alert
+          type={draftVersion ? 'warning' : 'info'}
+          showIcon
+          message={
+            draftVersion
+              ? `当前修改尚未冻结，发布后将成为 v${draftVersion.versionNo}；已飞的 v${
+                  activeVersion?.versionNo ?? '-'
+                } 会保留当时航高、重叠率和 GSD。`
+              : `当前冻结版本 v${activeVersion?.versionNo ?? '-'}：航高 ${activeVersion?.route.altitude ?? '-'} m / 航向重叠 ${
+                  activeVersion?.route.overlapForward ?? '-'
+                }% / 旁向重叠 ${activeVersion?.route.overlapSide ?? '-'}% / GSD ${activeVersion?.route.gsd ?? '-'} cm/px`
+          }
+          action={
+            <Button size="small" type="primary" loading={busy} onClick={freezeCurrentPlan}>
+              {draftVersion ? `发布 v${draftVersion.versionNo}` : '重新冻结新版本'}
+            </Button>
+          }
+        />
+      ) : (
+        <Alert type="info" showIcon message="规划中的参数仍可直接修改；任务进入待飞行时将生成 v1 冻结版本。" />
+      )}
 
       <Row gutter={14}>
         <Col span={15}>

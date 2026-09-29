@@ -76,17 +76,18 @@ export default function AssetGrid({
                   <Checkbox checked={selected} onChange={() => onToggle(asset.id)} />
                 </div>
                 <div style={{ position: 'absolute', top: 4, right: 4 }}>
-                  <Tag color={QUALITY_COLOR[asset.quality]}>{asset.quality}</Tag>
+                  <Tag color={asset.sortieId ? 'blue' : 'red'}>{asset.sortieId ? `架次 ${asset.sortieId.slice(-4)}` : '未绑定'}</Tag>
+                <Tag color={QUALITY_COLOR[asset.quality ?? '合格']}>{asset.quality ?? '待判'}</Tag>
                 </div>
               </div>
               <Typography.Text strong style={{ display: 'block', marginTop: 6 }}>
                 {asset.imageNo}
               </Typography.Text>
               <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
-                GSD {asset.gsd} cm/px · 重叠 {asset.overlap}% · 倾角 {asset.tiltAngle}°
+                GSD {asset.gsd ?? '—'} cm/px · 重叠 {asset.overlap ?? '—'}% · 倾角 {asset.tiltAngle ?? '—'}°
               </Typography.Text>
               <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
-                航高 {asset.altitude} m · {new Date(asset.shotAt).toLocaleString('zh-CN')}
+                航高 {asset.altitude ?? '—'} m · {asset.shotAt ? new Date(asset.shotAt).toLocaleString('zh-CN') : '拍摄时间待补'}
               </Typography.Text>
               <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block' }} ellipsis>
                 {asset.folder}
