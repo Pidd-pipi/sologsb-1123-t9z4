@@ -16,6 +16,7 @@ const QUALITY_COLOR: Record<ImageQuality, string> = {
   合格: 'green',
   模糊: 'gold',
   过曝: 'red',
+  未判: 'default',
 };
 
 /**
@@ -82,6 +83,14 @@ export default function AssetGrid({
               <Typography.Text strong style={{ display: 'block', marginTop: 6 }}>
                 {asset.imageNo}
               </Typography.Text>
+              <Space size={4} wrap style={{ marginTop: 2 }}>
+                {asset.sortieNo !== undefined && asset.sortieNo !== null ? (
+                  <Tag color="blue">第 {asset.sortieNo} 架次</Tag>
+                ) : (
+                  <Tag color="orange">未绑定架次</Tag>
+                )}
+                {asset.quality === '未判' ? <Tag>未判质量</Tag> : null}
+              </Space>
               <Typography.Text type="secondary" style={{ fontSize: 12, display: 'block' }}>
                 GSD {asset.gsd} cm/px · 重叠 {asset.overlap}% · 倾角 {asset.tiltAngle}°
               </Typography.Text>

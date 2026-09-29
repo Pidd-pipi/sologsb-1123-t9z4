@@ -24,6 +24,7 @@ import { useAssetStore } from '../stores/assetStore';
 import { useMissionFilter } from '../hooks/useMissionFilter';
 import MissionCard from '../components/common/MissionCard';
 import { MISSION_PURPOSES, MISSION_STATUSES, type LngLat, type MissionDraft, type MissionPurpose, type MissionStatus } from '../types/mission';
+import { getSchemeConflicts, getUnboundCount } from '../utils/schemeUtils';
 
 const DEFAULT_POLYGON: LngLat[] = [
   [116.3912, 39.9075],
@@ -53,7 +54,13 @@ export default function MissionList() {
   const addMission = useMissionStore((s) => s.add);
   const waypoints = useWaypointStore((s) => s.items);
   const assets = useAssetStore((s) => s.items);
+  const schemeVersions = useMissionStore((s) => s.schemeVersions);
+  const loadAllSchemeVersions = useMissionStore((s) => s.loadAllSchemeVersions);
   const { filters, patch, reset, result, options } = useMissionFilter();
+
+  useEffect(() => {
+    void loadAllSchemeVersions();
+  }, [loadAllSchemeVersions]);
 
   const [open, setOpen] = useState(false);
   const [error, setError] = useState('');
@@ -225,6 +232,8 @@ export default function MissionList() {
                 waypointCount={row.waypointCount}
                 assetCount={row.assetCount}
                 lineCount={row.waypointCount > 1 ? 1 : 0}
+                unboundCount={getUnboundCount(assets, row.mission.id)}
+                conflicts={getSchemeConflicts(row.mission, assets, schemeVersions)}
                 footer={
                   <Space wrap size={4}>
                     <Button size="small" type="link" onClick={() => navigate(`/missions/${row.mission.id}/route`)}>

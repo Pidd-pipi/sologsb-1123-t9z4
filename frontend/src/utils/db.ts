@@ -3,10 +3,11 @@ import type { CameraPreset, Mission } from '../types/mission';
 import type { Waypoint } from '../types/waypoint';
 import type { FlightLine } from '../types/flightline';
 import { makeThumbDataUrl, type AssetThumb, type ImageAsset } from '../types/imageasset';
+import type { SchemeVersion } from '../types/scheme';
 import { newId } from './id';
 
 export const DB_NAME = 'gbdronemap';
-export const DB_VERSION = 2;
+export const DB_VERSION = 3;
 export const LS_VERSION_KEY = 'gbdronemap:db-version';
 
 class DroneMapDB extends Dexie {
@@ -16,6 +17,7 @@ class DroneMapDB extends Dexie {
   assets!: Table<ImageAsset, string>;
   thumbs!: Table<AssetThumb, string>;
   presets!: Table<CameraPreset, string>;
+  schemes!: Table<SchemeVersion, string>;
 
   constructor() {
     super(DB_NAME);
@@ -54,6 +56,88 @@ class DroneMapDB extends Dexie {
             if (row.updatedAt === undefined) row.updatedAt = Date.now();
             if (row.batteryCount === undefined) row.batteryCount = 1;
           });
+      });
+    this.version(3)
+      .stores({
+        missions: 'id, missionNo, areaName, droneModel, flightDate, status, purpose, createdAt, currentVersion',
+        waypoints: 'id, missionId, seq, action, altitude',
+        lines: 'id, missionId, lineNo, updatedAt',
+        assets: 'id, missionId, imageNo, quality, shotAt, sortieNo',
+        thumbs: 'id, missionId',
+        presets: 'id, name, cameraModel',
+        schemes: 'id, missionId, versionNo, archivedAt',
+      })
+      .upgrade(async (tx) => {
+        // 为每个老任务补 currentVersion / archiveVersion，并生成初始方案版本快照
+        const missions = await tx.table('missions').toArray();
+        for (const mission of missions) {
+          if (mission.currentVersion === undefined) {
+            mission.currentVersion = 1;
+            mission.archiveVersion = 0;
+            await tx.table('missions').put(mission);
+          }
+          const existingCount = await tx.table('schemes').where('missionId').equals(mission.id).count();
+          if (existingCount > 0) continue;
+          const waypoints = await tx
+            .table('waypoints')
+            .where('missionId')
+            .equals(mission.id)
+            .sortBy('seq');
+          const lineRows = await tx.table('lines').where('missionId').equals(mission.id).toArray();
+          const line = lineRows.sort((a: FlightLine, b: FlightLine) => a.lineNo - b.lineNo)[0];
+          const snapshot: SchemeVersion = {
+            id: newId('scheme'),
+            missionId: mission.id,
+            versionNo: 1,
+            waypoints: waypoints.map((wp: Waypoint) => ({
+              seq: wp.seq,
+              lng: wp.lng,
+              lat: wp.lat,
+              altitude: wp.altitude,
+              speed: wp.speed,
+              heading: wp.heading,
+              gimbalPitch: wp.gimbalPitch,
+              action: wp.action,
+              hoverSec: wp.hoverSec,
+            })),
+            camera: {
+              cameraModel: mission.cameraModel,
+              sensorWidth: mission.sensorWidth,
+              sensorHeight: mission.sensorHeight,
+              focalLength: mission.focalLength,
+              pixelSize: mission.pixelSize,
+            },
+            line: line
+              ? {
+                  spacing: line.spacing,
+                  photoInterval: line.photoInterval,
+                  overlapForward: line.overlapForward,
+                  overlapSide: line.overlapSide,
+                  gsd: line.gsd,
+                  estPhotos: line.estPhotos,
+                  estDuration: line.estDuration,
+                  batteryCount: line.batteryCount,
+                  heading: line.heading,
+                }
+              : {
+                  spacing: 0,
+                  photoInterval: 0,
+                  overlapForward: 75,
+                  overlapSide: 70,
+                  gsd: 0,
+                  estPhotos: 0,
+                  estDuration: 0,
+                  batteryCount: 1,
+                  heading: 90,
+                },
+            sorties: line
+              ? splitSorties(line).map((s) => ({ sortieNo: s.sortie, photos: s.photos, durationMin: s.durationMin }))
+              : [],
+            createdAt: mission.createdAt,
+            archiveVersion: 0,
+          };
+          await tx.table('schemes').put(snapshot);
+        }
       });
   }
 }
@@ -101,6 +185,64 @@ export function splitSorties(line: FlightLine): { sortie: number; photos: number
   }));
 }
 
+/** 读取某任务的所有方案版本（按版本号升序） */
+export async function loadSchemeVersions(missionId: string): Promise<SchemeVersion[]> {
+  const rows = await db.schemes.where('missionId').equals(missionId).toArray();
+  return rows.sort((a, b) => a.versionNo - b.versionNo);
+}
+
+/** 由当前任务、航点、航线参数构建方案快照（不写库） */
+export async function buildSchemeSnapshot(mission: Mission): Promise<Omit<SchemeVersion, 'id' | 'missionId' | 'versionNo' | 'createdAt' | 'archiveVersion'>> {
+  const waypoints = await db.waypoints.where('missionId').equals(mission.id).sortBy('seq');
+  const line = await loadFlightLine(mission.id);
+  return {
+    waypoints: waypoints.map((wp) => ({
+      seq: wp.seq,
+      lng: wp.lng,
+      lat: wp.lat,
+      altitude: wp.altitude,
+      speed: wp.speed,
+      heading: wp.heading,
+      gimbalPitch: wp.gimbalPitch,
+      action: wp.action,
+      hoverSec: wp.hoverSec,
+    })),
+    camera: {
+      cameraModel: mission.cameraModel,
+      sensorWidth: mission.sensorWidth,
+      sensorHeight: mission.sensorHeight,
+      focalLength: mission.focalLength,
+      pixelSize: mission.pixelSize,
+    },
+    line: line
+      ? {
+          spacing: line.spacing,
+          photoInterval: line.photoInterval,
+          overlapForward: line.overlapForward,
+          overlapSide: line.overlapSide,
+          gsd: line.gsd,
+          estPhotos: line.estPhotos,
+          estDuration: line.estDuration,
+          batteryCount: line.batteryCount,
+          heading: line.heading,
+        }
+      : {
+          spacing: 0,
+          photoInterval: 0,
+          overlapForward: 75,
+          overlapSide: 70,
+          gsd: 0,
+          estPhotos: 0,
+          estDuration: 0,
+          batteryCount: 1,
+          heading: 90,
+        },
+    sorties: line
+      ? splitSorties(line).map((s) => ({ sortieNo: s.sortie, photos: s.photos, durationMin: s.durationMin }))
+      : [],
+  };
+}
+
 /** 首次进入灌入示范任务、航点、航线参数与成果影像条目 */
 export async function ensureSeedData(): Promise<void> {
   const count = await db.missions.count();
@@ -141,6 +283,8 @@ export async function ensureSeedData(): Promise<void> {
       flightDate: '2024-09-12',
       pilot: '穆清和',
       status: '已飞行',
+      currentVersion: 1,
+      archiveVersion: 0,
       createdAt: now - 30 * day,
     },
     {
@@ -159,6 +303,8 @@ export async function ensureSeedData(): Promise<void> {
       flightDate: '2024-09-20',
       pilot: '纪长风',
       status: '待飞行',
+      currentVersion: 1,
+      archiveVersion: 0,
       createdAt: now - 8 * day,
     },
   ];
@@ -287,13 +433,71 @@ export async function ensureSeedData(): Promise<void> {
     },
   ];
 
-  // 六张表超过 Dexie 位置参数上限，改用数组形式声明事务范围
-  await db.transaction('rw', [db.missions, db.waypoints, db.lines, db.assets, db.thumbs, db.presets], async () => {
+  // 为示范任务生成初始方案版本快照
+  const schemes: SchemeVersion[] = missions.map((mission) => {
+    const mWps = waypoints.filter((w) => w.missionId === mission.id).sort((a, b) => a.seq - b.seq);
+    const mLine = lines.find((l) => l.missionId === mission.id);
+    return {
+      id: newId('scheme'),
+      missionId: mission.id,
+      versionNo: 1,
+      waypoints: mWps.map((wp) => ({
+        seq: wp.seq,
+        lng: wp.lng,
+        lat: wp.lat,
+        altitude: wp.altitude,
+        speed: wp.speed,
+        heading: wp.heading,
+        gimbalPitch: wp.gimbalPitch,
+        action: wp.action,
+        hoverSec: wp.hoverSec,
+      })),
+      camera: {
+        cameraModel: mission.cameraModel,
+        sensorWidth: mission.sensorWidth,
+        sensorHeight: mission.sensorHeight,
+        focalLength: mission.focalLength,
+        pixelSize: mission.pixelSize,
+      },
+      line: mLine
+        ? {
+            spacing: mLine.spacing,
+            photoInterval: mLine.photoInterval,
+            overlapForward: mLine.overlapForward,
+            overlapSide: mLine.overlapSide,
+            gsd: mLine.gsd,
+            estPhotos: mLine.estPhotos,
+            estDuration: mLine.estDuration,
+            batteryCount: mLine.batteryCount,
+            heading: mLine.heading,
+          }
+        : {
+            spacing: 0,
+            photoInterval: 0,
+            overlapForward: 75,
+            overlapSide: 70,
+            gsd: 0,
+            estPhotos: 0,
+            estDuration: 0,
+            batteryCount: 1,
+            heading: 90,
+          },
+      sorties: mLine
+        ? splitSorties(mLine).map((s) => ({ sortieNo: s.sortie, photos: s.photos, durationMin: s.durationMin }))
+        : [],
+      createdAt: mission.createdAt,
+      archiveVersion: 0,
+    };
+  });
+
+  // 七张表超过 Dexie 位置参数上限，改用数组形式声明事务范围
+  await db.transaction('rw', [db.missions, db.waypoints, db.lines, db.assets, db.thumbs, db.presets, db.schemes], async () => {
     await db.missions.bulkPut(missions);
     await db.waypoints.bulkPut(waypoints);
     await db.lines.bulkPut(lines);
     await db.assets.bulkPut(assets);
     await db.thumbs.bulkPut(thumbs);
     await db.presets.bulkPut(presets);
+    await db.schemes.bulkPut(schemes);
   });
 }

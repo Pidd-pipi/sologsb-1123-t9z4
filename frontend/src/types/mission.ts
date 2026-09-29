@@ -34,6 +34,10 @@ export interface Mission {
   flightDate: string;
   pilot: string;
   status: MissionStatus;
+  /** 当前方案版本号（冻结后递增） */
+  currentVersion?: number;
+  /** 归档乐观锁版本号（每次归档 +1，用于并发冲突检测） */
+  archiveVersion?: number;
   createdAt: number;
 }
 

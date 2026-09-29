@@ -10,6 +10,7 @@ import { loadFlightLine, saveFlightLine, splitSorties } from '../utils/db';
 import { newId } from '../utils/id';
 import type { FlightLine } from '../types/flightline';
 import type { Waypoint } from '../types/waypoint';
+import SchemeVersionPanel from '../components/common/SchemeVersionPanel';
 
 type LineRow = { key: string; label: string; value: string };
 
@@ -216,6 +217,8 @@ export default function RoutePlanner() {
           </Space>
         )}
       </Card>
+
+      <SchemeVersionPanel mission={mission} />
     </Space>
   );
 }

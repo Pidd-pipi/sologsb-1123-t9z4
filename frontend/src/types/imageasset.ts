@@ -1,7 +1,7 @@
 /** 成果影像质量 */
-export type ImageQuality = '合格' | '模糊' | '过曝';
+export type ImageQuality = '合格' | '模糊' | '过曝' | '未判';
 
-export const IMAGE_QUALITIES: ImageQuality[] = ['合格', '模糊', '过曝'];
+export const IMAGE_QUALITIES: ImageQuality[] = ['合格', '模糊', '过曝', '未判'];
 
 /** 成果影像条目 */
 export interface ImageAsset {
@@ -23,6 +23,10 @@ export interface ImageAsset {
   quality: ImageQuality;
   /** 归档目录 */
   folder: string;
+  /** 绑定的架次号（未绑定则为空） */
+  sortieNo?: number;
+  /** 接收时对应的方案版本 id */
+  schemeVersionId?: string;
 }
 
 export type ImageAssetDraft = Omit<ImageAsset, 'id'>;
